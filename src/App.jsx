@@ -4,23 +4,27 @@ const GRID_SIZE = 10
 const TICK_MS = 250
 const SEC_PER_MONTH = 1
 const GAME_SECONDS = 180
+const START_HOUSES = 12 // 開始時に建つ住宅の件数
 
 const Tools = {
   BULLDOZE: 'bulldoze',
   PARK: 'park',
   RAIL: 'rail',
   STATION: 'station',
-  HOUSE: 'house',
-  APT: 'apt',
+  HOUSE: 'house', // 自動生成用（ツールでは使わない）
+  APT: 'apt',     // マンション
+  PUBLIC: 'public',
+  NEWTOWN: 'newtown',
 }
 
+// 原作のメニュー構成に近づける（住宅は自動発生、公園はメニューから除外）
 const ToolDefs = [
-  { id: Tools.BULLDOZE, name: '取り壊し', icon: '🧹', cost: 0, desc: '施設を撤去' },
-  { id: Tools.RAIL, name: '線路', icon: '🛤️', cost: 60, desc: '需要 +少' },
-  { id: Tools.STATION, name: '駅', icon: '🚉', cost: 400, desc: '需要 大（線路隣接）' },
-  { id: Tools.PARK, name: '公園', icon: '🌳', cost: 40, desc: '需要 +中' },
-  { id: Tools.HOUSE, name: '住宅', icon: '🏠', cost: 100, desc: '収容 +20' },
-  { id: Tools.APT, name: 'マンション', icon: '🏢', cost: 1200, desc: '収容 +200' },
+  { id: Tools.BULLDOZE, name: '取り壊し',   icon: '🧹', cost: 50,   maint: 0,    desc: '施設を撤去' },
+  { id: Tools.RAIL,     name: '線路',       icon: '🛤️', cost: 100,  maint: 5,    desc: '需要 +少' },
+  { id: Tools.STATION,  name: '駅',         icon: '🚉', cost: 400,  maint: 50,   desc: '需要 大（線路隣接）' },
+  { id: Tools.PUBLIC,   name: '市営住宅',   icon: '🏚️', cost: 1000, maint: 250,  desc: '初期住民300人' },
+  { id: Tools.APT,      name: 'マンション', icon: '🏢', cost: 2500, maint: 600,  desc: '初期住民500人' },
+  { id: Tools.NEWTOWN,  name: 'ニュータウン', icon: '🏙️', cost: 8000, maint: 2000, desc: '初期住民600人×4（2×2マス）' },
 ]
 
 const Tile = {
@@ -30,6 +34,8 @@ const Tile = {
   STATION: 'station',
   HOUSE: 'house',
   APT: 'apt',
+  PUBLIC: 'public',
+  NEWTOWN: 'newtown',
 }
 
 const TileIcons = {
@@ -39,6 +45,8 @@ const TileIcons = {
   [Tile.STATION]: '🚉',
   [Tile.HOUSE]: '🏠',
   [Tile.APT]: '🏢',
+  [Tile.PUBLIC]: '🏚️',
+  [Tile.NEWTOWN]: '🏙️',
 }
 
 const TileClass = {
@@ -48,10 +56,29 @@ const TileClass = {
   [Tile.STATION]: 't-station',
   [Tile.HOUSE]: 't-house',
   [Tile.APT]: 't-apt',
+  [Tile.PUBLIC]: 't-public',
+  [Tile.NEWTOWN]: 't-newtown',
 }
 
 function make2D(w, h, fill) {
   return Array.from({ length: h }, () => Array.from({ length: w }, () => fill))
+}
+
+function seedHouses(grid, count) {
+  const ng = grid.map(row => row.slice())
+  const empties = []
+  for (let y=0;y<GRID_SIZE;y++){
+    for (let x=0;x<GRID_SIZE;x++){
+      if (ng[y][x] === Tile.EMPTY) empties.push([x,y])
+    }
+  }
+  let n = Math.min(count, empties.length)
+  while (n-- > 0 && empties.length>0) {
+    const idx = Math.floor(Math.random()*empties.length)
+    const [x,y] = empties.splice(idx,1)[0]
+    ng[y][x] = Tile.HOUSE
+  }
+  return ng
 }
 
 function neighbors4(x, y) {
@@ -68,7 +95,7 @@ function stationConnectedToRail(grid, x, y) {
 }
 
 function countTiles(grid) {
-  const counts = { empty:0, park:0, rail:0, station:0, connectedStation:0, house:0, apt:0 }
+  const counts = { empty:0, park:0, rail:0, station:0, connectedStation:0, house:0, apt:0, public:0, newtown:0 }
   for (let y=0;y<GRID_SIZE;y++){
     for (let x=0;x<GRID_SIZE;x++){
       const t = grid[y][x]
@@ -81,31 +108,32 @@ function countTiles(grid) {
 
 function calcStats(grid, people) {
   const c = countTiles(grid)
-  const capacity = c.house*20 + c.apt*200
+  const capacity = c.house*20 + c.public*500 + c.apt*1000 + c.newtown*1000
   const base = 10
-  const demand = Math.floor(base + c.park*6 + c.rail*2 + c.connectedStation*80 + (c.station - c.connectedStation)*8)
+  const demand = Math.floor(base + /* c.park*6 + */ c.rail*2 + c.connectedStation*80 + (c.station - c.connectedStation)*8)
   return { capacity, demand, counts: c }
 }
 
 function monthlyIncome(grid, people) {
   const c = countTiles(grid)
-  const maintenance = Math.floor(c.rail*1 + c.station*4 + c.park*1)
+  const maintenance = Math.floor(c.rail*5 + c.station*50 + c.public*250 + c.apt*600 + c.newtown*500)
   const tax = Math.floor(people * 1)
   return tax - maintenance
 }
 
 function App() {
-  const [grid, setGrid] = useState(() => make2D(GRID_SIZE, GRID_SIZE, Tile.EMPTY))
+  const [grid, setGrid] = useState(() => seedHouses(make2D(GRID_SIZE, GRID_SIZE, Tile.EMPTY), START_HOUSES))
   const [money, setMoney] = useState(3000)
   const [people, setPeople] = useState(10)
   const [{capacity, demand}, setStats] = useState(() => calcStats(grid, 10))
-  const [tool, setTool] = useState(Tools.HOUSE)
+  const [tool, setTool] = useState(Tools.RAIL)
   const [started, setStarted] = useState(false)
   const [secondsElapsed, setSecondsElapsed] = useState(0)
   const [monthClock, setMonthClock] = useState(0)
   const [year, setYear] = useState(2025)
   const [month, setMonth] = useState(4)
   const [statusMsg, setStatusMsg] = useState('')
+  const [guideMsg, setGuideMsg] = useState('')
   const [tip, setTip] = useState('ツールを選んでマスをクリック')
   const [modal, setModal] = useState({ open:false, title:'', body:'' })
 
@@ -130,6 +158,15 @@ function App() {
         let np = p
         if (delta > 0) np = Math.min(capacity, p + delta)
         if (np > capacity) np = np - Math.min(2*(TICK_MS/1000), np - capacity)
+        // Guide messages inspired by the original
+        if (Math.floor(np) === 0) {
+          setGuideMsg('誰もいなくなってしまいました！　市長、責任をとってください！')
+        } else if (np < p && money < 0) {
+          setGuideMsg('財政が赤字で人口が減っています！　維持費を減らしましょう。')
+        } else {
+          // clear when population is above zero and not shrinking due to deficit
+          setGuideMsg('')
+        }
         return np
       })
     }, TICK_MS)
@@ -152,8 +189,31 @@ function App() {
       const inc = monthlyIncome(grid, people)
       setMoney(v => v + inc)
       setStatusMsg(`${year}年${(month%12)+1}月の収支：${inc}万円`)
+
+      // 自動住宅の発生（需要・収容に余裕があるとき）
+      const capGap = Math.max(0, capacity - people)
+      const demandGap = Math.max(0, demand - Math.floor(people/5))
+      if (capGap > 0 && demandGap > 0) {
+        const empties = []
+        for (let y=0;y<GRID_SIZE;y++) for (let x=0;x<GRID_SIZE;x++) if (grid[y][x] === Tile.EMPTY) empties.push([x,y])
+        if (empties.length > 0) {
+          const spawn = Math.min(2, empties.length)
+          const ng = grid.map(row => row.slice())
+          for (let i=0;i<spawn;i++) {
+            const idx = Math.floor(Math.random()*empties.length)
+            const [sx,sy] = empties.splice(idx,1)[0]
+            ng[sy][sx] = Tile.HOUSE
+          }
+          setGrid(ng)
+          // 少しだけ入居（上限は新規収容の範囲内）
+          setPeople(p => {
+            const free = Math.max(0, (capacity + spawn*20) - p)
+            return p + Math.min(spawn*5, free)
+          })
+        }
+      }
     }
-  }, [monthClock, started])
+  }, [monthClock, started, grid, people, capacity, demand, year, month])
 
   // game end
   useEffect(() => {
@@ -184,26 +244,59 @@ function App() {
         if (current === Tile.EMPTY) return prev
         const ng = prev.map(row => row.slice())
         ng[y][x] = Tile.EMPTY
-        setTip('更地にしました')
+        const def = ToolDefs.find(d => d.id === Tools.BULLDOZE)
+        if (!canAfford(def.cost)) { const lack = def.cost - money; setTip(`不足分を借入れ（${lack}万円）`) }
+        else { setTip(`取り壊し（${def.cost}万円）`) }
+        setMoney(m => m - def.cost)
         return ng
       }
-      if (current !== Tile.EMPTY) { setTip('ここには建てられません'); return prev }
+      // Newtown requires 2x2 of EMPTY or HOUSE (住宅上に建替え可)
+      if (tool === Tools.NEWTOWN) {
+        if (x+1>=GRID_SIZE || y+1>=GRID_SIZE) { setTip('2×2マスの空き地が必要です'); return prev }
+        const cells = [[x,y],[x+1,y],[x,y+1],[x+1,y+1]]
+        for (const [cx,cy] of cells) {
+          const tt = prev[cy][cx]
+          if (!(tt === Tile.EMPTY || tt === Tile.HOUSE)) { setTip('2×2マスの空き地（住宅は可）が必要です'); return prev }
+        }
+        const ng = prev.map(row => row.slice())
+        for (const [cx,cy] of cells) ng[cy][cx] = Tile.NEWTOWN
+        if (!canAfford(def.cost)) { const lack = def.cost - money; setTip(`不足分を借入れ（${lack}万円）`) }
+        else { setTip(`${def.name}を設置（${def.cost}万円）`) }
+        setMoney(m => m - def.cost)
+        // Adjust capacity delta if replacing houses (each house = 20 capacity)
+        const replacedHouses = cells.reduce((acc,[cx,cy]) => acc + (prev[cy][cx]===Tile.HOUSE?1:0), 0)
+        const capDelta = 4000 - replacedHouses*20
+        const init = 600*4
+        setPeople(p => { const free = Math.max(0,(capacity+capDelta)-p); return p + Math.min(init, free) })
+        return ng
+      }
+      // For PUBLIC/APT/RAIL/STATION, allow building over HOUSE
+      if (current !== Tile.EMPTY) {
+        const canOverHouse = (tool === Tools.PUBLIC || tool === Tools.APT || tool === Tools.RAIL || tool === Tools.STATION)
+        if (canOverHouse && current === Tile.HOUSE) {
+          // allowed (建て替え)
+        } else {
+          setTip('ここには建てられません'); return prev
+        }
+      }
       const ng = prev.map(row => row.slice())
       switch (tool) {
         case Tools.RAIL: ng[y][x] = Tile.RAIL; break
         case Tools.STATION: ng[y][x] = Tile.STATION; break
-        case Tools.PARK: ng[y][x] = Tile.PARK; break
-        case Tools.HOUSE: ng[y][x] = Tile.HOUSE; break
+        case Tools.PUBLIC: ng[y][x] = Tile.PUBLIC; break
         case Tools.APT: ng[y][x] = Tile.APT; break
         default: return prev
       }
-      if (!canAfford(def.cost)) {
-        const lack = def.cost - money
-        setTip(`不足分を借入れ（${lack}万円）`)
-      } else {
-        setTip(`${def.name}を設置（${def.cost}万円）`)
-      }
+      if (!canAfford(def.cost)) { const lack = def.cost - money; setTip(`不足分を借入れ（${lack}万円）`) }
+      else { setTip(`${def.name}を設置（${def.cost}万円）`) }
       setMoney(m => m - def.cost)
+      if (tool === Tools.PUBLIC || tool === Tools.APT) {
+        // if replacing a house, subtract 20 from capacity delta
+        const baseDelta = tool === Tools.PUBLIC ? 500 : 1000
+        const capDelta = baseDelta - (current === Tile.HOUSE ? 20 : 0)
+        const init = tool === Tools.PUBLIC ? 300 : 500
+        setPeople(p => { const free = Math.max(0,(capacity+capDelta)-p); return p + Math.min(init, free) })
+      }
       return ng
     })
   }
@@ -214,11 +307,13 @@ function App() {
     setTip('ゲーム開始！3分で人口を伸ばそう')
   }
   function reset() {
-    setGrid(make2D(GRID_SIZE, GRID_SIZE, Tile.EMPTY))
+    const base = make2D(GRID_SIZE, GRID_SIZE, Tile.EMPTY)
+    const seeded = seedHouses(base, START_HOUSES)
+    setGrid(seeded)
     setMoney(3000)
     setPeople(10)
-    setStats(calcStats(make2D(GRID_SIZE, GRID_SIZE, Tile.EMPTY), 10))
-    setTool(Tools.HOUSE)
+    setStats(calcStats(seeded, 10))
+    setTool(Tools.RAIL)
     setStarted(false)
     setSecondsElapsed(0)
     setMonthClock(0)
@@ -232,9 +327,9 @@ function App() {
   const HELP_HTML = `
     <p>3分間で人口をできるだけ増やすゲームです。</p>
     <ul>
-      <li>住宅（20人）やマンション（200人）で<b>収容</b>を増やします。</li>
+      <li>空きマスには自動で<b>住宅</b>が建ちます（無料）。</li>
+      <li><b>市営住宅</b>（初期住民300人）、<b>マンション</b>（初期住民500人）、<b>ニュータウン</b>（初期住民600×4, 2×2マス）を建設できます。</li>
       <li>線路と駅を組み合わせると<b>需要</b>が大きく伸びます。駅は線路に隣接すると効果大。</li>
-      <li>公園も需要を少し伸ばします。</li>
       <li>毎月、人口に応じて税収が入り、施設の維持費がかかります。</li>
       <li>3分経過で終了。最終人口がスコアです。</li>
     </ul>
@@ -255,6 +350,10 @@ function App() {
         </div>
       </header>
 
+      {guideMsg && (
+        <div className="guidebar">{guideMsg}</div>
+      )}
+
       <main className="layout">
         <section className="board" aria-label="マップ 10x10" style={{gridTemplateColumns:`repeat(${GRID_SIZE},1fr)`,gridTemplateRows:`repeat(${GRID_SIZE},1fr)`}}>
           {grid.map((row, y) => row.map((t, x) => (
@@ -271,7 +370,11 @@ function App() {
                   <div className="name">{def.name}</div>
                   <div className="meta">{def.cost}万円</div>
                 </div>
-                <button className={`select ${tool===def.id?'active':''}`} onClick={()=>{setTool(def.id); setTip(`${def.name}：${def.desc}（${def.cost}万円）`)}}>選択</button>
+                <button className={`select ${tool===def.id?'active':''}`} onClick={()=>{
+                  setTool(def.id);
+                  const maint = (def.maint ?? 0);
+                  setTip(`${def.name}：${def.desc}（${def.cost}万円）\n維持費：${maint}万円/月`)
+                }}>選択</button>
               </li>
             ))}
           </ul>
